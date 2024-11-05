@@ -1,3 +1,24 @@
+try
+    {
+        Add-Type -Path ".\bin\Microsoft.Identity.Client.dll" -ErrorAction Stop #microsoft.identity.client.4.66.1.nupkg
+        Add-Type -Path ".\bin\Microsoft.Data.SqlClient.dll" -ErrorAction Stop #microsoft.data.sqlclient.5.2.0.nupkg   / microsoft.data.sqlclient.sni.runtime.5.2.0.nupkg
+        Add-Type -Path ".\bin\Microsoft.SqlServer.Server.dll" -ErrorAction Stop #microsoft.sqlserver.server.1.0.0.nupkg
+    }
+    catch [System.Reflection.ReflectionTypeLoadException]
+    {
+        Write-Host "Message: $($_.Exception.Message)"
+        Write-Host "StackTrace: $($_.Exception.StackTrace)"
+        Write-Host "LoaderExceptions: $($_.Exception.LoaderExceptions)"
+    } 
+
+using namespace System.Data
+using namespace Microsoft.Data
+using namespace Microsoft.Data.SqlClient
+using namespace Microsoft.SqlServer.Server
+using namespace Microsoft.Data.SqlClient.Server
+using namespace Microsoft.Data.SqlTypes
+using namespace Microsoft.Data.Sql
+
 Function Invoke-SQLQuery {
     Param (
         [Parameter(Mandatory = $true, ParameterSetName="NoLogin")]
@@ -32,37 +53,77 @@ Function Invoke-SQLQuery {
 }
 
 Function Invoke-SQLStoredProcedure {
-    Param ( 
-        $StoredProcName,
-        $parameters=@{},
-        [string]$conn = $DefaultConnectionString,
-        $timeout=60
+    param(
+        [string]$connectionString = $DefaultConnectionString,
+        [string]$StoredProcedure,
+        [int32]$timeout = 60,
+        [hashtable]$parameters = @{},
+        [switch]$NoResults
     )
- 
-    $cmd= New-Object System.Data.SqlClient.SqlCommand
+    
+    try {
+        #$SqlConnection = New-Object System.Data.SqlClient.SqlConnection
+        $SqlConnection = New-Object Microsoft.Data.SqlClient.SqlConnection
+        $SqlConnection.ConnectionString = $connectionString
+        
+        #$SqlCmd = New-Object System.Data.SqlClient.SqlCommand
+        $SqlCmd = New-Object Microsoft.Data.SqlClient.SqlCommand
 
-    $cmd.CommandType=[System.Data.CommandType]'StoredProcedure'
-    $cmd.Connection=$conn
-    $cmd.CommandText=$storedProcName
-    $cmd.CommandTimeout=$timeout
-    ForEach($p in $parameters.Keys){
-        [Void] $cmd.Parameters.AddWithValue("@$p",$parameters[$p])
+        $SqlCmd.CommandType = [System.Data.CommandType]::StoredProcedure
+        $SqlCmd.CommandText = $StoredProcedure
+        $SqlCmd.CommandTimeout = $timeout
+        $SqlCmd.Connection = $SqlConnection
+
+        If ($parameters.count -gt 0) {
+        # Add parameters
+                    $paramArray = $SqlCmd.parameters
+
+                    ForEach ($parameterName in $parameters.Keys) {
+                        Switch ($parameters[$parameterName].gettype().name) {
+                            "String" {$type = [System.Data.SqlDbType]::NVarChar}
+                            "Int32" {$type = [System.Data.SqlDbType]::Int}
+                            "DateTime" {$type = [System.Data.SqlDbType]::DateTime2}
+                            "float"  {$type = [System.Data.SqlDbType]::Decimal}
+                            "boolean" {$type = [System.Data.SqlDbType]::Bool}
+                            Default {$type = [System.Data.SqlDbType]::NVarChar}
+                        }
+
+                        $param = New-Object Microsoft.Data.SqlClient.SqlParameter #System.Data.SqlClient.SqlParameter
+
+                        $param.ParameterName = "@$parameterName"
+
+                        $param.SqlDbType = $type
+
+                        #$param = New-Object System.Data.SqlClient.SqlParameter("@$parameterName", $type)
+                        If ($parameters[$parameterName] -eq $null) {
+                            $param.Value =  [DBNull]::Value
+                        } Else {
+                            $param.Value = $parameters[$parameterName]
+                        }
+                
+                        $SqlCmd.Parameters.Add($param) | Out-Null
+                    }
+               
+        }
+
     }
-     
-    #$id=$cmd.ExecuteScalar()
-    $adapter=New-Object system.Data.SqlClient.SqlDataAdapter($cmd)
-    $dataset=New-Object system.Data.DataSet
-   
-    $adapter.fill($dataset) | Out-Null
-   
-       #$reader = $cmd.ExecuteReader()
-   
-       #$results = @()
-       #while ($reader.Read())
-       #{
-       #    write-host "reached" -ForegroundColor Green
-       #}
-   
-    return $dataSet.Tables[0]
-   }
+    catch {
+        Write-Error $_
+    }
+
+    $SqlConnection.Open()
+
+    $SqlAdapter = New-Object Microsoft.Data.SqlClient.SqlDataAdapter
+    $SqlAdapter.SelectCommand = $SqlCmd
+
+    $DataSet = New-Object System.Data.DataSet
+
+    $SqlAdapter.Fill($DataSet) | Out-Null
+
+    $SqlConnection.Close()
+    If (!$NoResults) {
+        $DataSet.Tables[0]
+    }
+    
+}
 
